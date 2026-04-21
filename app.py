@@ -5,6 +5,10 @@ import urllib.request
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def home():
+    return "OK", 200
+
 @app.route('/', methods=['POST'])
 @app.route('/alice', methods=['POST'])
 def handler():
