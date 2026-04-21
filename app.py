@@ -9,7 +9,7 @@ import threading
 app = Flask(__name__)
 
 # =========================
-# 💾 ПАМЯТЬ (СТАБИЛЬНАЯ)
+# 💾 ПАМЯТЬ
 # =========================
 MEMORY_FILE = "memory.json"
 lock = threading.Lock()
@@ -36,14 +36,14 @@ MAX_HISTORY = 10
 # 🧠 РЕЖИМЫ
 # =========================
 MODES = {
-    "friend": "Ты дружелюбный собеседник, говори просто.",
-    "assistant": "Ты умный ассистент, отвечай чётко и полезно.",
-    "expert": "Ты эксперт, давай точные и глубокие ответы."
+    "friend": "Ты дружелюбный собеседник.",
+    "assistant": "Ты умный ассистент, отвечай чётко.",
+    "expert": "Ты эксперт, давай точные технические ответы."
 }
 
 DEFAULT_MODE = "assistant"
 
-SYSTEM_BASE = "Ты AI ассистент внутри голосового помощника. Будь кратким и полезным."
+SYSTEM = "Ты AI ассистент внутри голосового помощника. Будь кратким."
 
 # =========================
 # ⚡ АНТИ-СПАМ
@@ -52,12 +52,12 @@ LAST_TIME = 0
 MIN_DELAY = 0.3
 
 # =========================
-# 🧠 СТАБИЛЬНЫЕ МОДЕЛИ (ВАЖНО)
+# 🧠 СТАБИЛЬНЫЕ МОДЕЛИ
 # =========================
 MODELS = [
-    "google/gemma-7b-it",
-    "meta-llama/llama-3.1-8b-instruct",
-    "microsoft/phi-3-mini-128k-instruct"
+    "openai/gpt-3.5-turbo",
+    "anthropic/claude-3-haiku",
+    "mistralai/mistral-small"
 ]
 
 
@@ -72,10 +72,10 @@ def handler():
     global LAST_TIME, memory
 
     try:
-        data = request.get_json(force=True)
+        body = request.get_json(force=True)
 
-        req = data.get("request", {})
-        session_id = data.get("session", {}).get("session_id", "default")
+        req = body.get("request", {})
+        session = body.get("session", {}).get("session_id", "default")
 
         user_text = req.get("command") or req.get("original_utterance", "")
 
@@ -97,23 +97,23 @@ def handler():
         # =========================
         # 🧠 память
         # =========================
-        if session_id not in memory:
-            memory[session_id] = {
+        if session not in memory:
+            memory[session] = {
                 "history": [],
                 "mode": DEFAULT_MODE
             }
 
-        mode = memory[session_id]["mode"]
-        history = memory[session_id]["history"]
+        mode = memory[session]["mode"]
+        history = memory[session]["history"]
 
-        system_prompt = SYSTEM_BASE + " " + MODES.get(mode, MODES["assistant"])
+        system_prompt = SYSTEM + " " + MODES.get(mode, MODES["assistant"])
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_text})
 
         # =========================
-        # 🌐 OPENROUTER
+        # 🌐 AI запрос
         # =========================
         answer = None
 
@@ -151,7 +151,7 @@ def handler():
             return send("AI временно недоступен.", [])
 
         # =========================
-        # 🧠 обновляем память
+        # 💾 память сохраняем
         # =========================
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": answer})
@@ -159,7 +159,7 @@ def handler():
         if len(history) > MAX_HISTORY * 2:
             history = history[-MAX_HISTORY * 2:]
 
-        memory[session_id]["history"] = history
+        memory[session]["history"] = history
         save_memory(memory)
 
         # очистка
