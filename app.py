@@ -9,7 +9,7 @@ import threading
 app = Flask(__name__)
 
 # =========================
-# 🧠 ДОЛГАЯ ПАМЯТЬ (ФАЙЛ)
+# 💾 ПАМЯТЬ (СТАБИЛЬНАЯ)
 # =========================
 MEMORY_FILE = "memory.json"
 lock = threading.Lock()
@@ -28,42 +28,36 @@ def save_memory(data):
         with open(MEMORY_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-CHAT_MEMORY = load_memory()
+memory = load_memory()
 
-MAX_HISTORY = 12
+MAX_HISTORY = 10
 
 # =========================
-# ⚡ РЕЖИМЫ АССИСТЕНТА
+# 🧠 РЕЖИМЫ
 # =========================
 MODES = {
-    "friend": "Ты дружелюбный, простой друг. Отвечай легко и по-человечески.",
-    "assistant": "Ты умный полезный ассистент. Отвечай чётко и по делу.",
-    "expert": "Ты эксперт. Давай точные, глубокие и технические ответы."
+    "friend": "Ты дружелюбный собеседник, говори просто.",
+    "assistant": "Ты умный ассистент, отвечай чётко и полезно.",
+    "expert": "Ты эксперт, давай точные и глубокие ответы."
 }
 
 DEFAULT_MODE = "assistant"
 
-# =========================
-# 🧠 ПРЕДСТАВЛЕНИЕ ЛИЧНОСТИ
-# =========================
-BASE_PERSONALITY = (
-    "Ты AI ассистент внутри голосового помощника. "
-    "Ты краткий, умный, не болтаешь лишнего."
-)
+SYSTEM_BASE = "Ты AI ассистент внутри голосового помощника. Будь кратким и полезным."
 
 # =========================
 # ⚡ АНТИ-СПАМ
 # =========================
-LAST_REQUEST_TIME = 0
-MIN_DELAY = 0.4
+LAST_TIME = 0
+MIN_DELAY = 0.3
 
 # =========================
-# 🛡 СТАБИЛЬНЫЕ МОДЕЛИ OPENROUTER
+# 🧠 СТАБИЛЬНЫЕ МОДЕЛИ (ВАЖНО)
 # =========================
 MODELS = [
-    "mistralai/mistral-7b-instruct",
-    "openchat/openchat-7b",
-    "gryphe/mythomax-l2-13b"
+    "google/gemma-7b-it",
+    "meta-llama/llama-3.1-8b-instruct",
+    "microsoft/phi-3-mini-128k-instruct"
 ]
 
 
@@ -75,57 +69,51 @@ def home():
 @app.route("/", methods=["POST"])
 @app.route("/alice", methods=["POST"])
 def handler():
-    global LAST_REQUEST_TIME, CHAT_MEMORY
+    global LAST_TIME, memory
 
     try:
-        body = request.get_json(force=True)
+        data = request.get_json(force=True)
 
-        req = body.get("request", {})
-        session = body.get("session", {}).get("session_id", "default")
+        req = data.get("request", {})
+        session_id = data.get("session", {}).get("session_id", "default")
 
         user_text = req.get("command") or req.get("original_utterance", "")
 
         if not user_text:
-            return send_response("Спроси меня что-нибудь.", [])
+            return send("Спроси меня что-нибудь.", [])
 
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         if not api_key:
-            return send_response("Нет API ключа.", [])
+            return send("Нет API ключа.", [])
 
         # =========================
-        # ⚡ ускорение
+        # ⚡ задержка
         # =========================
         now = time.time()
-        if now - LAST_REQUEST_TIME < MIN_DELAY:
-            time.sleep(MIN_DELAY - (now - LAST_REQUEST_TIME))
-        LAST_REQUEST_TIME = time.time()
-
-        # =========================
-        # 🧠 режим
-        # =========================
-        mode = DEFAULT_MODE
-        if session in CHAT_MEMORY and isinstance(CHAT_MEMORY[session], dict):
-            mode = CHAT_MEMORY[session].get("mode", DEFAULT_MODE)
-
-        system_prompt = BASE_PERSONALITY + " " + MODES.get(mode, MODES["assistant"])
+        if now - LAST_TIME < MIN_DELAY:
+            time.sleep(MIN_DELAY - (now - LAST_TIME))
+        LAST_TIME = time.time()
 
         # =========================
         # 🧠 память
         # =========================
-        if session not in CHAT_MEMORY:
-            CHAT_MEMORY[session] = {
+        if session_id not in memory:
+            memory[session_id] = {
                 "history": [],
                 "mode": DEFAULT_MODE
             }
 
-        history = CHAT_MEMORY[session]["history"]
+        mode = memory[session_id]["mode"]
+        history = memory[session_id]["history"]
+
+        system_prompt = SYSTEM_BASE + " " + MODES.get(mode, MODES["assistant"])
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_text})
 
         # =========================
-        # 🌐 OpenRouter (fallback)
+        # 🌐 OPENROUTER
         # =========================
         answer = None
 
@@ -156,14 +144,14 @@ def handler():
                 break
 
             except Exception as e:
-                print(f"Model failed {model}: {str(e)}")
+                print("MODEL FAIL:", model, str(e))
                 continue
 
-        if answer is None:
-            return send_response("AI временно недоступен.", [])
+        if not answer:
+            return send("AI временно недоступен.", [])
 
         # =========================
-        # 🧠 сохраняем память
+        # 🧠 обновляем память
         # =========================
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": answer})
@@ -171,23 +159,23 @@ def handler():
         if len(history) > MAX_HISTORY * 2:
             history = history[-MAX_HISTORY * 2:]
 
-        CHAT_MEMORY[session]["history"] = history
-        save_memory(CHAT_MEMORY)
+        memory[session_id]["history"] = history
+        save_memory(memory)
 
-        # очистка текста
+        # очистка
         answer = answer.replace("*", "").replace("#", "").replace("`", "")
 
         if len(answer) > 800:
             answer = answer[:800] + "..."
 
-        return send_response(answer, [])
+        return send(answer, [])
 
     except Exception as e:
         print("ERROR:", str(e))
-        return send_response("Ошибка сервера.", [])
+        return send("Ошибка сервера.", [])
 
 
-def send_response(text, history):
+def send(text, history):
     return jsonify({
         "version": "1.0",
         "response": {
