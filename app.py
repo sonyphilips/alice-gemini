@@ -7,7 +7,7 @@ import time
 
 app = Flask(__name__)
 
-# анти-спам (минимальная пауза между запросами)
+# анти-спам
 LAST_REQUEST_TIME = 0
 MIN_DELAY = 1.0  # секунды
 
@@ -31,9 +31,9 @@ def handler():
         if not user_text:
             return send_response("Привет! Спроси меня что-нибудь.", [])
 
-        api_key = os.environ.get("GEMINI_API_KEY", "")
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
         if not api_key:
-            return send_response("Ошибка: нет API ключа.", [])
+            return send_response("Ошибка: нет API ключа OpenRouter.", [])
 
         # 🔹 анти-спам
         now = time.time()
@@ -44,27 +44,30 @@ def handler():
 
         LAST_REQUEST_TIME = time.time()
 
-        # 🔹 Gemini API
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        # 🔹 OpenRouter API
+        url = "https://openrouter.ai/api/v1/chat/completions"
 
         payload = {
-            "contents": [
+            "model": "openai/gpt-4o-mini",
+            "messages": [
                 {
                     "role": "user",
-                    "parts": [{"text": user_text}]
+                    "content": user_text
                 }
             ],
-            "generationConfig": {
-                "maxOutputTokens": 300,
-                "temperature": 0.7
-            }
+            "temperature": 0.7,
+            "max_tokens": 300
         }
 
         data = json.dumps(payload).encode("utf-8")
+
         req_obj = urllib.request.Request(
             url,
             data=data,
-            headers={"Content-Type": "application/json"}
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
         )
 
         result = None
@@ -72,47 +75,43 @@ def handler():
         # 🔹 retry логика
         for attempt in range(3):
             try:
-                print(f"Запрос к Gemini, попытка {attempt + 1}")
-                with urllib.request.urlopen(req_obj, timeout=15) as res:
+                print(f"Запрос к OpenRouter, попытка {attempt + 1}")
+
+                with urllib.request.urlopen(req_obj, timeout=20) as res:
                     result = json.loads(res.read().decode("utf-8"))
                 break
 
             except urllib.error.HTTPError as e:
                 error_body = e.read().decode("utf-8", errors="ignore")
-                print("=== GEMINI HTTP ERROR ===")
+                print("=== OPENROUTER HTTP ERROR ===")
                 print("Код:", e.code)
                 print("Ответ:", error_body)
 
                 if e.code == 429:
-                    # если вообще нет лимита
-                    if "limit: 0" in error_body:
-                        return send_response("AI временно недоступен. Проверь API ключ.", [])
-
                     wait = 2 * (attempt + 1)
                     print(f"Лимит. Ждём {wait} сек...")
                     time.sleep(wait)
                 else:
-                    return send_response("Ошибка Gemini API.", [])
+                    return send_response("Ошибка OpenRouter API.", [])
 
             except urllib.error.URLError as e:
-                print("=== GEMINI URL ERROR ===")
+                print("=== OPENROUTER URL ERROR ===")
                 print(str(e))
                 return send_response("Ошибка соединения с AI.", [])
 
             except Exception as e:
-                print("=== GEMINI UNKNOWN ERROR ===")
+                print("=== OPENROUTER UNKNOWN ERROR ===")
                 print(str(e))
                 return send_response("Ошибка обработки AI.", [])
 
-        # если все попытки не удались
         if result is None:
-            return send_response("Сервис перегружен. Попробуй чуть позже.", [])
+            return send_response("Сервис перегружен. Попробуй позже.", [])
 
-        # 🔹 извлечение ответа
+        # 🔹 извлечение ответа OpenRouter
         try:
-            answer = result["candidates"][0]["content"]["parts"][0]["text"]
+            answer = result["choices"][0]["message"]["content"]
         except Exception:
-            print("Нестандартный ответ Gemini:", result)
+            print("Нестандартный ответ OpenRouter:", result)
             return send_response("Не удалось получить ответ от AI.", [])
 
         # очистка текста
