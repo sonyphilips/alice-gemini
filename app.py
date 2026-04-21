@@ -29,7 +29,7 @@ def alice_handler():
         if not api_key:
             return send_response("Ошибка: ключ Gemini не настроен.", history)
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
 
         payload = {
             "contents": history,
