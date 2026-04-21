@@ -4,12 +4,67 @@ import os
 import urllib.request
 import urllib.error
 import time
+import threading
 
 app = Flask(__name__)
 
-# анти-спам
+# =========================
+# 🧠 ДОЛГАЯ ПАМЯТЬ (ФАЙЛ)
+# =========================
+MEMORY_FILE = "memory.json"
+lock = threading.Lock()
+
+def load_memory():
+    if not os.path.exists(MEMORY_FILE):
+        return {}
+    try:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_memory(data):
+    with lock:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+CHAT_MEMORY = load_memory()
+
+MAX_HISTORY = 12
+
+# =========================
+# ⚡ РЕЖИМЫ АССИСТЕНТА
+# =========================
+MODES = {
+    "friend": "Ты дружелюбный, простой друг. Отвечай легко и по-человечески.",
+    "assistant": "Ты умный полезный ассистент. Отвечай чётко и по делу.",
+    "expert": "Ты эксперт. Давай точные, глубокие и технические ответы."
+}
+
+DEFAULT_MODE = "assistant"
+
+# =========================
+# 🧠 ПРЕДСТАВЛЕНИЕ ЛИЧНОСТИ
+# =========================
+BASE_PERSONALITY = (
+    "Ты AI ассистент внутри голосового помощника. "
+    "Ты краткий, умный, не болтаешь лишнего."
+)
+
+# =========================
+# ⚡ АНТИ-СПАМ
+# =========================
 LAST_REQUEST_TIME = 0
-MIN_DELAY = 1.0  # секунды
+MIN_DELAY = 0.4
+
+# =========================
+# 🛡 СТАБИЛЬНЫЕ МОДЕЛИ OPENROUTER
+# =========================
+MODELS = [
+    "mistralai/mistral-7b-instruct",
+    "openchat/openchat-7b",
+    "gryphe/mythomax-l2-13b"
+]
 
 
 @app.route("/", methods=["GET"])
@@ -20,99 +75,104 @@ def home():
 @app.route("/", methods=["POST"])
 @app.route("/alice", methods=["POST"])
 def handler():
-    global LAST_REQUEST_TIME
+    global LAST_REQUEST_TIME, CHAT_MEMORY
 
     try:
         body = request.get_json(force=True)
 
-        req_data = body.get("request", {})
-        user_text = req_data.get("command") or req_data.get("original_utterance", "")
+        req = body.get("request", {})
+        session = body.get("session", {}).get("session_id", "default")
+
+        user_text = req.get("command") or req.get("original_utterance", "")
 
         if not user_text:
-            return send_response("Привет! Спроси меня что-нибудь.", [])
+            return send_response("Спроси меня что-нибудь.", [])
 
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         if not api_key:
-            return send_response("Ошибка: нет API ключа OpenRouter.", [])
+            return send_response("Нет API ключа.", [])
 
-        # 🔹 анти-спам
+        # =========================
+        # ⚡ ускорение
+        # =========================
         now = time.time()
         if now - LAST_REQUEST_TIME < MIN_DELAY:
-            wait_time = MIN_DELAY - (now - LAST_REQUEST_TIME)
-            print(f"Ждём {wait_time:.2f} сек (анти-спам)")
-            time.sleep(wait_time)
-
+            time.sleep(MIN_DELAY - (now - LAST_REQUEST_TIME))
         LAST_REQUEST_TIME = time.time()
 
-        # 🔹 OpenRouter API
-        url = "https://openrouter.ai/api/v1/chat/completions"
+        # =========================
+        # 🧠 режим
+        # =========================
+        mode = DEFAULT_MODE
+        if session in CHAT_MEMORY and isinstance(CHAT_MEMORY[session], dict):
+            mode = CHAT_MEMORY[session].get("mode", DEFAULT_MODE)
 
-        payload = {
-            "model": "meta-llama/llama-3.1-8b-instruct:free",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": user_text
-                }
-            ],
-            "temperature": 0.7,
-            "max_tokens": 300
-        }
+        system_prompt = BASE_PERSONALITY + " " + MODES.get(mode, MODES["assistant"])
 
-        data = json.dumps(payload).encode("utf-8")
-
-        req_obj = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
+        # =========================
+        # 🧠 память
+        # =========================
+        if session not in CHAT_MEMORY:
+            CHAT_MEMORY[session] = {
+                "history": [],
+                "mode": DEFAULT_MODE
             }
-        )
 
-        result = None
+        history = CHAT_MEMORY[session]["history"]
 
-        # 🔹 retry логика
-        for attempt in range(3):
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": user_text})
+
+        # =========================
+        # 🌐 OpenRouter (fallback)
+        # =========================
+        answer = None
+
+        for model in MODELS:
             try:
-                print(f"Запрос к OpenRouter, попытка {attempt + 1}")
+                url = "https://openrouter.ai/api/v1/chat/completions"
+
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 250
+                }
+
+                req_obj = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key}"
+                    }
+                )
 
                 with urllib.request.urlopen(req_obj, timeout=20) as res:
                     result = json.loads(res.read().decode("utf-8"))
+
+                answer = result["choices"][0]["message"]["content"]
                 break
 
-            except urllib.error.HTTPError as e:
-                error_body = e.read().decode("utf-8", errors="ignore")
-                print("=== OPENROUTER HTTP ERROR ===")
-                print("Код:", e.code)
-                print("Ответ:", error_body)
-
-                if e.code == 429:
-                    wait = 2 * (attempt + 1)
-                    print(f"Лимит. Ждём {wait} сек...")
-                    time.sleep(wait)
-                else:
-                    return send_response("Ошибка OpenRouter API.", [])
-
-            except urllib.error.URLError as e:
-                print("=== OPENROUTER URL ERROR ===")
-                print(str(e))
-                return send_response("Ошибка соединения с AI.", [])
-
             except Exception as e:
-                print("=== OPENROUTER UNKNOWN ERROR ===")
-                print(str(e))
-                return send_response("Ошибка обработки AI.", [])
+                print(f"Model failed {model}: {str(e)}")
+                continue
 
-        if result is None:
-            return send_response("Сервис перегружен. Попробуй позже.", [])
+        if answer is None:
+            return send_response("AI временно недоступен.", [])
 
-        # 🔹 извлечение ответа OpenRouter
-        try:
-            answer = result["choices"][0]["message"]["content"]
-        except Exception:
-            print("Нестандартный ответ OpenRouter:", result)
-            return send_response("Не удалось получить ответ от AI.", [])
+        # =========================
+        # 🧠 сохраняем память
+        # =========================
+        history.append({"role": "user", "content": user_text})
+        history.append({"role": "assistant", "content": answer})
+
+        if len(history) > MAX_HISTORY * 2:
+            history = history[-MAX_HISTORY * 2:]
+
+        CHAT_MEMORY[session]["history"] = history
+        save_memory(CHAT_MEMORY)
 
         # очистка текста
         answer = answer.replace("*", "").replace("#", "").replace("`", "")
@@ -123,8 +183,8 @@ def handler():
         return send_response(answer, [])
 
     except Exception as e:
-        print("ОБЩАЯ ОШИБКА:", str(e))
-        return send_response("Произошла ошибка. Попробуй ещё раз.", [])
+        print("ERROR:", str(e))
+        return send_response("Ошибка сервера.", [])
 
 
 def send_response(text, history):
