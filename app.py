@@ -65,17 +65,23 @@ def handler():
                 break
 
             except urllib.error.HTTPError as e:
-                error_body = e.read().decode("utf-8", errors="ignore")
-                print("=== GEMINI HTTP ERROR ===")
-                print("Код:", e.code)
-                print("Ответ:", error_body)
+    error_body = e.read().decode("utf-8", errors="ignore")
+    print("=== GEMINI HTTP ERROR ===")
+    print("Код:", e.code)
+    print("Ответ:", error_body)
 
-                if e.code == 429:
-                    wait = 2 * (attempt + 1)
-                    print(f"Лимит. Ждём {wait} сек...")
-                    time.sleep(wait)
-                else:
-                    return send_response("Ошибка Gemini API.", [])
+    if e.code == 429:
+
+        # 👇 ВСТАВЛЯЕШЬ СЮДА
+        if "limit: 0" in error_body:
+            return send_response("AI временно недоступен. Проверь API ключ.", [])
+
+        wait = 2 * (attempt + 1)
+        print(f"Лимит. Ждём {wait} сек...")
+        time.sleep(wait)
+
+    else:
+        return send_response("Ошибка Gemini API.", [])
 
             except Exception as e:
                 print("=== GEMINI UNKNOWN ERROR ===")
